@@ -76,47 +76,41 @@ def ble_message(**mqttmsg):
         return
 
     m = mqttmsg['payload_obj']
-    log.debug(json.dumps(m))
-    mac = m['locs'][0]['tags'][0]['id'].lower()
-    rssi = m['locs'][0]['tags'][0]['rssi']
+    #log.debug(json.dumps(m))
 
-    data = m['locs'][0]['tags'][0]['ed']['ad']
-    if len(data) < 26:
-        STATS['wrong_len'] += 1
-        return
+    for device in m['locs'][0]['tags']:
+        log.debug(device)
+        mac = device['id'].lower()
+        if mac not in DEVICES:
+            log.debug(f"MAC skipped {mac}")
+            continue
+        rssi = device['rssi']
+        pdu = device['ed']['ad']
+        # unclear if 26 is a sane value?
+        if len(pdu) < 26:
+            log.debug(f"PDU {pdu} length < 26, assume invalid")
+        clean_mac = bytes(bytearray.fromhex(mac.replace(':', '')))
+        log.debug(DEVICES[mac])
+        if (DEVICES[mac]['device'] == "xiaomi"):
+            res = bleparser.parse_xiaomi(ble_parser, bytes(bytearray.fromhex(pdu)), clean_mac, rssi)
+            # packet sometimes is garbage
+            if not res:
+                log.warning(f'Xiaomi {mac} returned garbage')
+                continue
+            temp = -100
+            hum = 0
+            bat = 0
+            volts = 0
+            if 'temperature' in res:
+                temp = res['temperature']
+            if 'humidity' in res:
+                hum = res['humidity']
+            if 'battery' in res:
+                bat = res['battery']
+            if 'voltage' in res:
+                volts = res['voltage']
 
-    log.debug(f"DEVICES == {DEVICES}")
-    if mac not in DEVICES:
-        log.debug(f"MAC skipped {mac}")
-        return
-
-    h_mac = mac.replace(':', '')
-    log.debug(f"mac is {mac}")
-    log.debug(f"raw BLE PDU received {data}")
-    h_mac = bytes(bytearray.fromhex(h_mac))
-    res = bleparser.parse_xiaomi(ble_parser, bytes(bytearray.fromhex(data)), h_mac, rssi)
-
-    # 0 is a reasonable temperature but -100 is not :)
-    h_temp = -100
-    h_humidity = 0
-    h_battery_pct = 0
-    h_battery_v = 0
-
-    log.debug(f"res is {res}")
-
-    if 'temperature' in res:
-        h_temp = res['temperature']
-    if 'humidity' in res:
-        h_humidity = res['humidity']
-    if 'battery' in res:
-        h_battery_pct = res['battery']
-    if 'voltage' in res:
-        h_battery_v = res['voltage']
-
-    h_rssi = int(rssi)
-
-    log.debug(f'MAC: {mac} h_temp={h_temp:.1f} h_humidity={h_humidity}')
-    update_ble_entities(mac, DEVICES[mac]['name'], h_temp, h_humidity, h_battery_pct, h_battery_v, h_rssi)
+            update_ble_entities(mac, DEVICES[mac]['name'], temp, hum, bat, volts, int(rssi))
 
 # generate an MQTT topic trigger 
 def mqttTrigger(topic):
@@ -133,6 +127,7 @@ def initialize(cfg):
 
     for mac in cfg['devices']:
         name = cfg['devices'][mac]['name']
+        device_type = cfg['devices'][mac]['device']
         # contruct an entity name, all lower case and replacing illegal characters with '_'
         ent_name = re.sub(r'[^0-9A-Za-z]', '_', name.lower())
         mac = mac.lower()
@@ -143,6 +138,7 @@ def initialize(cfg):
             'attributes_initialized': False,
             'mac':                  mac,
             'name':                 name,
+            'device':               device_type,
             'dups':                 0,
             'missing':              0
         }
